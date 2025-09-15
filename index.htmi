@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>출석 시스템 미리보기</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+  <style>
+    body { font-family: sans-serif; background:#f5f5f5; margin:0; padding:0; }
+    .container { padding: 20px; max-width: 900px; margin: auto; background:white; margin-top:40px; border-radius:8px; box-shadow:0 4px 8px rgba(0,0,0,0.1);}
+    input, select { padding:6px; border:1px solid #ccc; border-radius:4px; margin-right:4px;}
+    button { cursor:pointer; padding:4px 8px; border-radius:4px; }
+    table { border-collapse: collapse; width:100%; margin-top:8px;}
+    th, td { border:1px solid #ccc; padding:4px 8px; text-align:left;}
+    th { background:#eee; }
+    .message { color:red; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function AttendanceApp() {
+      const DEFAULT_TOTAL = 70;
+      const DAYS = ['Day 1', 'Day 2', 'Day 3'];
+      const SESSIONS_PER_DAY = 8;
+
+      const [isAdminMode, setIsAdminMode] = useState(false);
+      const [adminToken, setAdminToken] = useState('1234');
+      const [message, setMessage] = useState('');
+
+      const [roster, setRoster] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('roster_v1')) || makeEmptyRoster(DEFAULT_TOTAL); } catch { return makeEmptyRoster(DEFAULT_TOTAL); }
+      });
+
+      const [attendance, setAttendance] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('attendance_v1')) || {}; } catch { return {}; }
+      });
+
+      const [participantNumber, setParticipantNumber] = useState('');
+      const [enteredCode, setEnteredCode] = useState('');
+      const [serverCode, setServerCode] = useState(null);
+      const [selectedDay, setSelectedDay] = useState(0);
+      const [selectedSession, setSelectedSession] = useState(0);
+
+      useEffect(() => { localStorage.setItem('roster_v1', JSON.stringify(roster)); }, [roster]);
+      useEffect(() => { localStorage.setItem('attendance_v1', JSON.stringify(attendance)); }, [attendance]);
+
+      function makeEmptyRoster(n) {
+        const arr = [{ number: 0, name: 'N/A' }];
+        for (let i = 1; i <= n; i++) arr.push({ number: i, name: '' });
+        return arr;
+      }
+
+      const handleUserCheckIn = () => {
+        const num = parseInt(participantNumber,10);
+        if (!num || num <1 || num> roster.length-1){ setMessage('올바른 참가번호를 입력하세요'); return;}
+        if (!enteredCode || enteredCode !== serverCode){ setMessage('출석 코드가 올바르지 않습니다'); return;}
+        setAttendance(prev => ({
+          ...prev,
+          [num]: {...(prev[num]||{}), [`${selectedDay}-${selectedSession}`]: {time:new Date().toISOString(), code:enteredCode, source:'local'}}
+        }));
+        setMessage(`${num} ${roster[num]?.name || ''} 출석 완료`);
+        setParticipantNumber(''); setEnteredCode('');
+      };
+
+      const activateAdminMode = () => {
+        if (adminToken.trim() === '1234') { setIsAdminMode(true); setMessage('관리자 모드 활성화'); }
+        else { setMessage('관리자 토큰이 올바르지 않습니다'); }
+      };
+
+      const generateCode = () => {
+        const code = Math.random().toString(36).slice(-6).toUpperCase();
+        setServerCode(code);
+        setMessage(`출석 코드 생성: ${code}`);
+      };
+
+      const exportCSV = () => {
+        const headers = ['번호','이름','일-세션','시간','코드','출처'];
+        const rows = [];
+        for (let i=1;i<roster.length;i++){
+          const r=roster[i];
+          const att=attendance[i]||{};
+          for(const k of Object.keys(att)){
+            rows.push([i,r.name||'',k,att[k].time||'',att[k].code||'',att[k].source||'']);
+          }
+          if(Object.keys(att).length===0) rows.push([i,r.name||'','','','','']);
+        }
+        const csv = [headers.join(','), ...rows.map(r=>r.map(v=>`"${v}"`).join(','))].join('\n');
+        const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+        const url = URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download='attendance.csv'; a.click(); URL.revokeObjectURL(url);
+        setMessage('CSV 내보내기 완료');
+      };
+
+      const handleRosterUploadFile = (file) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const lines = e.target.result.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+          const newRoster = makeEmptyRoster(DEFAULT_TOTAL);
+          for (const line of lines){
+            const [numStr,...nameParts] = line.split(',').map(s=>s.trim());
+            const num = parseInt(numStr,10);
+            const name = nameParts.join(',')||'';
+            if(!isNaN(num)&&num>=1){
+              while(newRoster.length<=num) newRoster.push({number:newRoster.length,name:''});
+              newRoster[num]={number:num,name};
+            }
+          }
+          setRoster(newRoster);
+          setMessage('명단 업로드 완료');
+        };
+        reader.readAsText(file,'utf-8');
+      };
+
+      const uploadToServer = async() => { setMessage('서버 업로드 완료 (예시)'); };
+
+      return (
+        <div className="container">
+          <h1 style={{textAlign:'center'}}>출석 시스템 미리보기</h1>
+
+          {/* 사용자 모드 */}
+          {!isAdminMode && (
+            <div style={{marginTop:10,textAlign:'center'}}>
+              <input placeholder="참가번호" value={participantNumber} onChange={e=>setParticipantNumber(e.target.value)} />
+              <input placeholder="출석 코드" value={enteredCode} onChange={e=>setEnteredCode(e.target.value)} />
+              <select value={selectedDay} onChange={e=>setSelectedDay(parseInt(e.target.value))}>
+                {DAYS.map((d,i)=><option key={i} value={i}>{d}</option>)}
+              </select>
+              <select value={selectedSession} onChange={e=>setSelectedSession(parseInt(e.target.value))}>
+                {Array.from({length:SESSIONS_PER_DAY},(_,i)=><option key={i} value={i}>Session {i+1}</option>)}
+              </select>
+              <button onClick={handleUserCheckIn} style={{background:'green',color:'white'}}>출석 완료</button>
+            </div>
+          )}
+
+          {/* 관리자 모드 토글 */}
+          {!isAdminMode && (
+            <div style={{marginTop:10,textAlign:'center'}}>
+              <input placeholder="관리자 토큰" value={adminToken} onChange={e=>setAdminToken(e.target.value)} />
+              <button onClick={activateAdminMode} style={{background:'blue',color:'white'}}>관리자 모드 활성화</button>
+            </div>
+          )}
+
+          {/* 관리자 패널 */}
+          {isAdminMode && (
+            <div style={{border:'1px solid #ccc',padding:10,borderRadius:6,marginTop:10}}>
+              <h2>관리자 패널</h2>
+              <div style={{marginTop:6}}>
+                <button onClick={generateCode} style={{background:'indigo',color:'white'}}>출석 코드 생성</button>
+                현재 코드: {serverCode || '-'}
+              </div>
+
+              <div style={{marginTop:6}}>
+                <label>명단 CSV 업로드: </label>
+                <input type="file" accept=".csv" onChange={e=>e.target.files[0] && handleRosterUploadFile(e.target.files[0])}/>
+              </div>
+
+              <div style={{marginTop:6}}>
+                <button onClick={exportCSV} style={{background:'orange',color:'white'}}>CSV 다운로드</button>
+                <button onClick={uploadToServer} style={{background:'purple',color:'white'}}>서버 업로드</button>
+              </div>
+
+              <div style={{marginTop:10}}>
+                <strong>출결 확인</strong>
+                <table>
+                  <thead>
+                    <tr><th>번호</th><th>이름</th><th>출결</th></tr>
+                  </thead>
+                  <tbody>
+                    {roster.slice(1).map(r=>(
+                      <tr key={r.number}>
+                        <td>{r.number}</td>
+                        <td>{r.name}</td>
+                        <td>{attendance[r.number]?Object.keys(attendance[r.number]).map(k=>`${k} (${attendance[r.number][k].source})`).join(', '):'-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{marginTop:6}}><strong>메시지:</strong> {message}</div>
+            </div>
+          )}
+
+          {!isAdminMode && message && <div className="message">{message}</div>}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<AttendanceApp />);
+  </script>
+</body>
+</html>
